@@ -1,4 +1,4 @@
-# 🚀 Python_Taskflow_Engine — Python TaskFlow & Persistence Engine
+# 🚀 Python_Taskflow_Engine 
 
 A full-stack, multi-page task management and real-time audit logging application built with **Python (Flask)**, **PostgreSQL (`psycopg2`)**, and a responsive **Bootstrap 5** frontend (`TaskFlow Studio`). This system provides persistent task tracking, ACID transactions, endpoint metadata via `urls.json`, and a dedicated database operations audit trail tracking every `INSERT`, `UPDATE`, and `DELETE` action.
 
