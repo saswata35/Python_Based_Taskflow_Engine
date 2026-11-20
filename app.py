@@ -21,70 +21,103 @@ DB_CONFIG = {
 }
 
 
+def parse_bool(value, default=False):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in ("true", "1", "yes", "on"):
+            return True
+        if normalized in ("false", "0", "no", "off", ""):
+            return False
+    return default
+
+
 def get_db_connection():
+    """Creates a new PostgreSQL database connection."""
     return psycopg2.connect(**DB_CONFIG)
 
 
 def init_db():
-    """Automatically creates tables in PostgreSQL if they do not exist."""
-    conn = get_db_connection()
-    cur = conn.cursor()
+    """Automatically creates required tables and seeds initial data if empty."""
+    conn = None
+    cur = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
 
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS tasks (
-            id SERIAL PRIMARY KEY,
-            title VARCHAR(255) NOT NULL,
-            completed BOOLEAN NOT NULL DEFAULT FALSE
-        );
-    """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS tasks (
+                id SERIAL PRIMARY KEY,
+                title VARCHAR(255) NOT NULL,
+                completed BOOLEAN NOT NULL DEFAULT FALSE
+            );
+        """)
 
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS task_audit_log (
-            id SERIAL PRIMARY KEY,
-            operation_type VARCHAR(50) NOT NULL,
-            details TEXT NOT NULL,
-            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-    """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS task_audit_log (
+                id SERIAL PRIMARY KEY,
+                operation_type VARCHAR(50) NOT NULL,
+                details TEXT NOT NULL,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
 
-    cur.execute("SELECT COUNT(*) FROM tasks;")
-    if cur.fetchone()[0] == 0:
-        cur.execute(
-            "INSERT INTO tasks (title, completed) VALUES (%s, %s) RETURNING id;",
-            ("Welcome to Full-Stack Python & PostgreSQL Engine", False)
-        )
-        new_id = cur.fetchone()[0]
-        cur.execute(
-            "INSERT INTO task_audit_log (operation_type, details) VALUES (%s, %s);",
-            ("INSERT", f"Initialized system with sample task ID #{new_id}")
-        )
+        cur.execute("SELECT COUNT(*) FROM tasks;")
+        if cur.fetchone()[0] == 0:
+            cur.execute(
+                "INSERT INTO tasks (title, completed) VALUES (%s, %s) RETURNING id;",
+                ("Welcome to Full-Stack Python & PostgreSQL Engine", False)
+            )
+            new_id = cur.fetchone()[0]
+            cur.execute(
+                "INSERT INTO task_audit_log (operation_type, details) VALUES (%s, %s);",
+                ("INSERT", f"Initialized system with sample task ID #{new_id}")
+            )
 
-    conn.commit()
-    cur.close()
-    conn.close()
+        conn.commit()
+    except Exception as exc:
+        if conn:
+            conn.rollback()
+        print(f"[DB INIT ERROR] {exc}")
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
 
 
 def load_urls_json():
-    """Loads URL definitions from urls.json."""
+    """Loads URL definitions safely from urls.json."""
+    fallback = {
+        "service": "Python TaskFlow & Persistence Engine",
+        "base_url": "http://localhost:5000",
+        "urls": []
+    }
     if not URLS_FILE.exists():
-        return {
-            "service": "Python TaskFlow & Persistence Engine",
-            "base_url": "http://localhost:5000",
-            "urls": []
-        }
-    with URLS_FILE.open("r", encoding="utf-8") as f:
-        return json.load(f)
+        return fallback
+    try:
+        with URLS_FILE.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+            return data if isinstance(data, dict) else fallback
+    except Exception as exc:
+        print(f"[URLS JSON ERROR] {exc}")
+        return fallback
 
 
 # ==========================================
-# 2. Multi-Page UI Routes (All serve index.html with route-aware state)
+# 2. Multi-Page UI Routes
 # ==========================================
 @app.route("/")
 @app.route("/audit")
 @app.route("/urls")
 @app.route("/status")
 def multi_page_app():
-    return send_from_directory(app.static_folder, "index.html")
+    resp = send_from_directory(app.static_folder, "index.html")
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    return resp
 
 
 # ==========================================
@@ -92,111 +125,174 @@ def multi_page_app():
 # ==========================================
 @app.route("/api/tasks", methods=["GET"])
 def get_tasks():
-    conn = get_db_connection()
-    cur = conn.cursor(cursor_factory=RealDictCursor)
-    cur.execute("SELECT id, title, completed FROM tasks ORDER BY id ASC;")
-    tasks = cur.fetchall()
-    cur.close()
-    conn.close()
-    return jsonify(tasks), 200
+    conn = None
+    cur = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("SELECT id, title, completed FROM tasks ORDER BY id ASC;")
+        tasks = cur.fetchall()
+        for row in tasks:
+            row["completed"] = bool(row["completed"])
+        return jsonify(tasks), 200
+    except Exception as exc:
+        return jsonify({"error": f"Database error: {exc}"}), 500
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
 
 
 @app.route("/api/tasks", methods=["POST"])
 def create_task():
     data = request.get_json(silent=True) or {}
     title = str(data.get("title", "")).strip()
+    completed = parse_bool(data.get("completed", False), default=False)
+
     if not title:
         return jsonify({"error": "Task title is required"}), 400
 
-    conn = get_db_connection()
-    cur = conn.cursor(cursor_factory=RealDictCursor)
+    conn = None
+    cur = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
 
-    cur.execute(
-        "INSERT INTO tasks (title, completed) VALUES (%s, %s) RETURNING id, title, completed;",
-        (title, False)
-    )
-    new_task = cur.fetchone()
+        cur.execute(
+            "INSERT INTO tasks (title, completed) VALUES (%s, %s) RETURNING id, title, completed;",
+            (title, completed)
+        )
+        new_task = cur.fetchone()
+        new_task["completed"] = bool(new_task["completed"])
 
-    cur.execute(
-        "INSERT INTO task_audit_log (operation_type, details) VALUES (%s, %s);",
-        ("INSERT", f"Created task #{new_task['id']}: '{title}'")
-    )
+        status_label = "Completed" if completed else "Pending"
+        cur.execute(
+            "INSERT INTO task_audit_log (operation_type, details) VALUES (%s, %s);",
+            ("INSERT", f"Created task #{new_task['id']}: '{title}' ({status_label})")
+        )
 
-    conn.commit()
-    cur.close()
-    conn.close()
-    return jsonify(new_task), 201
+        conn.commit()
+        return jsonify(new_task), 201
+    except Exception as exc:
+        if conn:
+            conn.rollback()
+        return jsonify({"error": f"Failed to create task: {exc}"}), 500
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
 
 
 @app.route("/api/tasks/<int:task_id>", methods=["PUT"])
 def update_task(task_id):
     data = request.get_json(silent=True) or {}
-    title = data.get("title")
-    completed = data.get("completed")
 
-    conn = get_db_connection()
-    cur = conn.cursor(cursor_factory=RealDictCursor)
+    conn = None
+    cur = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
 
-    cur.execute(
-        "UPDATE tasks SET title = %s, completed = %s WHERE id = %s RETURNING id, title, completed;",
-        (title, completed, task_id)
-    )
-    updated_task = cur.fetchone()
+        cur.execute("SELECT id, title, completed FROM tasks WHERE id = %s;", (task_id,))
+        existing = cur.fetchone()
+        if not existing:
+            return jsonify({"error": "Task not found"}), 404
 
-    if not updated_task:
-        cur.close()
-        conn.close()
-        return jsonify({"error": "Task not found"}), 404
+        new_title = (
+            str(data["title"]).strip()
+            if "title" in data and data["title"] is not None
+            else existing["title"]
+        )
+        if not new_title:
+            return jsonify({"error": "Task title cannot be empty"}), 400
 
-    status_text = "Completed" if completed else "Pending"
-    cur.execute(
-        "INSERT INTO task_audit_log (operation_type, details) VALUES (%s, %s);",
-        ("UPDATE", f"Updated task #{task_id} ('{title}') status to {status_text}")
-    )
+        new_completed = (
+            parse_bool(data["completed"], default=bool(existing["completed"]))
+            if "completed" in data
+            else bool(existing["completed"])
+        )
 
-    conn.commit()
-    cur.close()
-    conn.close()
-    return jsonify(updated_task), 200
+        cur.execute(
+            "UPDATE tasks SET title = %s, completed = %s WHERE id = %s RETURNING id, title, completed;",
+            (new_title, new_completed, task_id)
+        )
+        updated_task = cur.fetchone()
+        updated_task["completed"] = bool(updated_task["completed"])
+
+        status_text = "Completed" if new_completed else "Pending"
+        cur.execute(
+            "INSERT INTO task_audit_log (operation_type, details) VALUES (%s, %s);",
+            ("UPDATE", f"Updated task #{task_id} ('{new_title}') -> {status_text}")
+        )
+
+        conn.commit()
+        return jsonify(updated_task), 200
+    except Exception as exc:
+        if conn:
+            conn.rollback()
+        return jsonify({"error": f"Failed to update task: {exc}"}), 500
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
 
 
 @app.route("/api/tasks/<int:task_id>", methods=["DELETE"])
 def delete_task(task_id):
-    conn = get_db_connection()
-    cur = conn.cursor(cursor_factory=RealDictCursor)
+    conn = None
+    cur = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
 
-    cur.execute("DELETE FROM tasks WHERE id = %s RETURNING id, title;", (task_id,))
-    deleted_task = cur.fetchone()
+        cur.execute("DELETE FROM tasks WHERE id = %s RETURNING id, title;", (task_id,))
+        deleted_task = cur.fetchone()
 
-    if not deleted_task:
-        cur.close()
-        conn.close()
-        return jsonify({"error": "Task not found"}), 404
+        if not deleted_task:
+            return jsonify({"error": "Task not found"}), 404
 
-    cur.execute(
-        "INSERT INTO task_audit_log (operation_type, details) VALUES (%s, %s);",
-        ("DELETE", f"Deleted task #{task_id}: '{deleted_task['title']}'")
-    )
+        cur.execute(
+            "INSERT INTO task_audit_log (operation_type, details) VALUES (%s, %s);",
+            ("DELETE", f"Deleted task #{task_id}: '{deleted_task['title']}'")
+        )
 
-    conn.commit()
-    cur.close()
-    conn.close()
-    return jsonify({"message": "Deleted successfully"}), 200
+        conn.commit()
+        return jsonify({"message": "Deleted successfully", "id": deleted_task["id"]}), 200
+    except Exception as exc:
+        if conn:
+            conn.rollback()
+        return jsonify({"error": f"Failed to delete task: {exc}"}), 500
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
 
 
 @app.route("/api/audit", methods=["GET"])
 def get_audit_logs():
-    conn = get_db_connection()
-    cur = conn.cursor(cursor_factory=RealDictCursor)
-    cur.execute("""
-        SELECT id, operation_type AS "operationType", details, timestamp
-        FROM task_audit_log
-        ORDER BY id ASC;
-    """)
-    logs = cur.fetchall()
-    cur.close()
-    conn.close()
-    return jsonify(logs), 200
+    conn = None
+    cur = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("""
+            SELECT id, operation_type AS "operationType", details, timestamp
+            FROM task_audit_log
+            ORDER BY id ASC;
+        """)
+        logs = cur.fetchall()
+        return jsonify(logs), 200
+    except Exception as exc:
+        return jsonify({"error": f"Failed to load audit logs: {exc}"}), 500
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
 
 
 @app.route("/api/urls", methods=["GET"])
@@ -206,31 +302,43 @@ def get_urls():
 
 @app.route("/api/status", methods=["GET"])
 def api_status():
-    conn = get_db_connection()
-    cur = conn.cursor(cursor_factory=RealDictCursor)
+    conn = None
+    cur = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
 
-    cur.execute("SELECT COUNT(*) AS total_tasks FROM tasks;")
-    total_tasks = cur.fetchone()["total_tasks"]
+        cur.execute("SELECT COUNT(*) AS total_tasks FROM tasks;")
+        total_tasks = cur.fetchone()["total_tasks"]
 
-    cur.execute("SELECT COUNT(*) AS total_audits FROM task_audit_log;")
-    total_audits = cur.fetchone()["total_audits"]
+        cur.execute("SELECT COUNT(*) AS completed_tasks FROM tasks WHERE completed = TRUE;")
+        completed_tasks = cur.fetchone()["completed_tasks"]
 
-    cur.close()
-    conn.close()
+        cur.execute("SELECT COUNT(*) AS total_audits FROM task_audit_log;")
+        total_audits = cur.fetchone()["total_audits"]
 
-    url_map = {item["name"]: item["url"] for item in load_urls_json().get("urls", [])}
+        url_map = {item["name"]: item["url"] for item in load_urls_json().get("urls", [])}
 
-    return jsonify({
-        "service": "Python TaskFlow & Persistence Engine",
-        "status": "running",
-        "database": DB_CONFIG["dbname"],
-        "urls_file": str(URLS_FILE),
-        "urls": url_map,
-        "counts": {
-            "tasks": total_tasks,
-            "audit_logs": total_audits
-        }
-    }), 200
+        return jsonify({
+            "service": "Python TaskFlow & Persistence Engine",
+            "status": "running",
+            "database": DB_CONFIG["dbname"],
+            "urls_file": str(URLS_FILE),
+            "urls": url_map,
+            "counts": {
+                "tasks": total_tasks,
+                "completed_tasks": completed_tasks,
+                "pending_tasks": total_tasks - completed_tasks,
+                "audit_logs": total_audits
+            }
+        }), 200
+    except Exception as exc:
+        return jsonify({"service": "Python TaskFlow & Persistence Engine", "status": "degraded", "error": str(exc)}), 500
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
 
 
 # ==========================================

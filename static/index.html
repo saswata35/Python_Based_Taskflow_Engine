@@ -15,7 +15,6 @@
       --text-main: #f1f5f9;
       --text-muted: #94a3b8;
       --accent: #38bdf8;
-      --accent-2: #34d399;
     }
 
     * { box-sizing: border-box; }
@@ -48,7 +47,6 @@
       }
     }
 
-    /* Sidebar Rail */
     .rail {
       background: rgba(18, 26, 48, 0.88);
       backdrop-filter: blur(14px);
@@ -133,7 +131,6 @@
       color: var(--text-muted);
     }
 
-    /* Main Content Area */
     .main-stage {
       padding: 1rem;
       max-width: 1180px;
@@ -179,7 +176,6 @@
       box-shadow: 0 0 8px #34d399;
     }
 
-    /* Bento KPI Grid */
     .kpi-grid {
       display: grid;
       grid-template-columns: repeat(3, 1fr);
@@ -274,7 +270,6 @@
       --bs-table-hover-bg: rgba(56, 189, 248, 0.06);
     }
 
-    /* Mobile Bottom Dock */
     .mobile-dock {
       position: fixed;
       bottom: 0;
@@ -313,7 +308,6 @@
 </head>
 <body>
   <div class="app-shell">
-    <!-- Desktop Left Command Rail -->
     <aside class="rail">
       <div>
         <div class="brand-badge">
@@ -355,7 +349,6 @@
       </div>
     </aside>
 
-    <!-- Main Stage -->
     <main class="main-stage">
       <div class="topbar">
         <div>
@@ -370,7 +363,9 @@
         </div>
       </div>
 
-      <!-- PAGE 1: / (Tasks Workspace) -->
+      <div id="feedbackAlert" class="alert alert-danger d-none py-2 px-3 small" role="alert"></div>
+
+      <!-- PAGE 1: / -->
       <section id="view-tasks" class="page-view active">
         <div class="kpi-grid">
           <div class="kpi-card">
@@ -415,7 +410,7 @@
         </div>
       </section>
 
-      <!-- PAGE 2: /audit (Database Audit Log) -->
+      <!-- PAGE 2: /audit -->
       <section id="view-audit" class="page-view">
         <div class="surface-card">
           <div class="d-flex justify-content-between align-items-center mb-3">
@@ -440,7 +435,7 @@
         </div>
       </section>
 
-      <!-- PAGE 3: /urls (Multi-Page Directory + urls.json) -->
+      <!-- PAGE 3: /urls -->
       <section id="view-urls" class="page-view">
         <div class="surface-card mb-3">
           <h2 class="h6 fw-bold mb-3 text-white">Open Application Pages &amp; Endpoints</h2>
@@ -456,7 +451,7 @@
         </div>
       </section>
 
-      <!-- PAGE 4: /status (Live Service & DB Diagnostics) -->
+      <!-- PAGE 4: /status -->
       <section id="view-status" class="page-view">
         <div class="surface-card">
           <div class="d-flex justify-content-between align-items-center mb-3">
@@ -469,7 +464,6 @@
     </main>
   </div>
 
-  <!-- Mobile Bottom Navigation Bar -->
   <nav class="mobile-dock">
     <button class="dock-btn active" data-route="/"><i class="bi bi-kanban"></i><span>Tasks</span></button>
     <button class="dock-btn" data-route="/audit"><i class="bi bi-journal-check"></i><span>Audit</span></button>
@@ -480,6 +474,17 @@
   <script>
     let allTasks = [];
     let currentFilter = 'all';
+
+    function showError(msg) {
+      const box = document.getElementById('feedbackAlert');
+      if (!msg) {
+        box.classList.add('d-none');
+        box.textContent = '';
+        return;
+      }
+      box.textContent = msg;
+      box.classList.remove('d-none');
+    }
 
     const routeMeta = {
       '/':       { view: 'view-tasks',  title: 'Tasks Workspace',  subtitle: 'Create, toggle, and delete tasks persisted in PostgreSQL', load: fetchTasks },
@@ -530,7 +535,7 @@
 
     function renderTasks() {
       const total = allTasks.length;
-      const completed = allTasks.filter(t => t.completed).length;
+      const completed = allTasks.filter(t => Boolean(t.completed)).length;
       const pending = total - completed;
 
       document.getElementById('totalCount').textContent = total;
@@ -538,8 +543,9 @@
       document.getElementById('pendingCount').textContent = pending;
 
       const filtered = allTasks.filter(t => {
-        if (currentFilter === 'completed') return t.completed;
-        if (currentFilter === 'pending') return !t.completed;
+        const isDone = Boolean(t.completed);
+        if (currentFilter === 'completed') return isDone;
+        if (currentFilter === 'pending') return !isDone;
         return true;
       });
 
@@ -549,51 +555,88 @@
         return;
       }
 
-      list.innerHTML = filtered.map(task => `
-        <div class="task-row">
-          <label class="d-flex align-items-center gap-3 m-0 flex-grow-1" style="cursor: pointer;">
-            <input type="checkbox" class="form-check-input fs-5 m-0" ${task.completed ? 'checked' : ''}
-                   onchange="toggleTask(${task.id}, ${JSON.stringify(task.title)}, ${!task.completed})">
-            <span class="task-title ${task.completed ? 'done' : 'fw-medium'}">${escapeHtml(task.title)}</span>
-          </label>
-          <button class="btn btn-sm btn-outline-danger" onclick="deleteTask(${task.id})">
-            <i class="bi bi-trash3"></i>
-          </button>
-        </div>
-      `).join('');
+      list.innerHTML = filtered.map(task => {
+        const isDone = Boolean(task.completed);
+        return `
+          <div class="task-row">
+            <label class="d-flex align-items-center gap-3 m-0 flex-grow-1" style="cursor: pointer;">
+              <input type="checkbox" class="form-check-input fs-5 m-0 task-toggle"
+                     data-id="${task.id}" ${isDone ? 'checked' : ''} />
+              <span class="task-title ${isDone ? 'done' : 'fw-medium'}">${escapeHtml(task.title)}</span>
+            </label>
+            <button class="btn btn-sm btn-outline-danger task-delete" data-id="${task.id}">
+              <i class="bi bi-trash3"></i>
+            </button>
+          </div>
+        `;
+      }).join('');
+
+      document.querySelectorAll('.task-toggle').forEach(cb => {
+        cb.addEventListener('change', async (e) => {
+          const id = Number(e.target.dataset.id);
+          const task = allTasks.find(item => Number(item.id) === id);
+          if (!task) return;
+          await toggleTask(id, task.title, e.target.checked);
+        });
+      });
+
+      document.querySelectorAll('.task-delete').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+          const id = Number(e.currentTarget.dataset.id);
+          await deleteTask(id);
+        });
+      });
     }
 
     async function fetchTasks() {
-      const res = await fetch('/api/tasks');
-      allTasks = await res.json();
-      renderTasks();
+      try {
+        const res = await fetch(`/api/tasks?_t=${Date.now()}`, { cache: 'no-store' });
+        const data = await res.json();
+        if (!res.ok) {
+          showError(data.error || 'Failed to load tasks.');
+          return;
+        }
+        showError('');
+        allTasks = Array.isArray(data) ? data : [];
+        renderTasks();
+      } catch (err) {
+        showError(`Network error while loading tasks: ${err.message}`);
+      }
     }
 
     async function fetchAuditLogs() {
-      const res = await fetch('/api/audit');
-      const logs = await res.json();
-      const tbody = document.getElementById('auditTableBody');
-      if (!logs.length) {
-        tbody.innerHTML = `<tr><td colspan="4" class="text-center py-4 text-secondary">No audit logs found.</td></tr>`;
-        return;
+      try {
+        const res = await fetch(`/api/audit?_t=${Date.now()}`, { cache: 'no-store' });
+        const logs = await res.json();
+        const tbody = document.getElementById('auditTableBody');
+        if (!res.ok) {
+          tbody.innerHTML = `<tr><td colspan="4" class="text-center py-4 text-danger">${escapeHtml(logs.error || 'Failed to load audit logs')}</td></tr>`;
+          return;
+        }
+        if (!logs.length) {
+          tbody.innerHTML = `<tr><td colspan="4" class="text-center py-4 text-secondary">No audit logs found.</td></tr>`;
+          return;
+        }
+        tbody.innerHTML = [...logs].reverse().map(log => {
+          const badge = log.operationType === 'INSERT' ? 'bg-success'
+                      : log.operationType === 'UPDATE' ? 'bg-warning text-dark'
+                      : 'bg-danger';
+          return `
+            <tr>
+              <td class="fw-bold">#${log.id}</td>
+              <td><span class="badge ${badge}">${escapeHtml(log.operationType)}</span></td>
+              <td>${escapeHtml(log.details)}</td>
+              <td class="text-secondary small">${new Date(log.timestamp).toLocaleString()}</td>
+            </tr>
+          `;
+        }).join('');
+      } catch (err) {
+        console.error(err);
       }
-      tbody.innerHTML = [...logs].reverse().map(log => {
-        const badge = log.operationType === 'INSERT' ? 'bg-success'
-                    : log.operationType === 'UPDATE' ? 'bg-warning text-dark'
-                    : 'bg-danger';
-        return `
-          <tr>
-            <td class="fw-bold">#${log.id}</td>
-            <td><span class="badge ${badge}">${escapeHtml(log.operationType)}</span></td>
-            <td>${escapeHtml(log.details)}</td>
-            <td class="text-secondary small">${new Date(log.timestamp).toLocaleString()}</td>
-          </tr>
-        `;
-      }).join('');
     }
 
     async function fetchUrlsPage() {
-      const res = await fetch('/api/urls');
+      const res = await fetch(`/api/urls?_t=${Date.now()}`, { cache: 'no-store' });
       const data = await res.json();
       document.getElementById('urlsJsonBox').textContent = JSON.stringify(data, null, 2);
 
@@ -621,7 +664,7 @@
     }
 
     async function fetchStatusPage() {
-      const res = await fetch('/api/status');
+      const res = await fetch(`/api/status?_t=${Date.now()}`, { cache: 'no-store' });
       const data = await res.json();
       document.getElementById('statusJsonBox').textContent = JSON.stringify(data, null, 2);
     }
@@ -630,27 +673,46 @@
       const input = document.getElementById('taskInput');
       const title = input.value.trim();
       if (!title) return;
-      await fetch('/api/tasks', {
+      const res = await fetch('/api/tasks', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title })
+        body: JSON.stringify({ title, completed: false })
       });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        showError(data.error || 'Could not create task.');
+        return;
+      }
+      showError('');
       input.value = '';
-      fetchTasks();
+      await fetchTasks();
     }
 
     async function toggleTask(id, title, completed) {
-      await fetch(`/api/tasks/${id}`, {
+      const res = await fetch(`/api/tasks/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title, completed })
+        body: JSON.stringify({ title, completed: Boolean(completed) })
       });
-      fetchTasks();
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        showError(data.error || 'Could not update task status.');
+        await fetchTasks();
+        return;
+      }
+      showError('');
+      await fetchTasks();
     }
 
     async function deleteTask(id) {
-      await fetch(`/api/tasks/${id}`, { method: 'DELETE' });
-      fetchTasks();
+      const res = await fetch(`/api/tasks/${id}`, { method: 'DELETE' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        showError(data.error || 'Could not delete task.');
+        return;
+      }
+      showError('');
+      await fetchTasks();
     }
 
     function escapeHtml(text) {
