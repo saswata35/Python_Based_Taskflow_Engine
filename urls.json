@@ -1,0 +1,42 @@
+{
+  "service": "Python TaskFlow & Persistence Engine",
+  "base_url": "http://localhost:5000",
+  "urls": [
+    {
+      "name": "Task Dashboard UI",
+      "path": "/",
+      "url": "http://localhost:5000/",
+      "methods": ["GET"]
+    },
+    {
+      "name": "Tasks REST API",
+      "path": "/api/tasks",
+      "url": "http://localhost:5000/api/tasks",
+      "methods": ["GET", "POST"]
+    },
+    {
+      "name": "Single Task Operations API",
+      "path": "/api/tasks/<int:task_id>",
+      "url": "http://localhost:5000/api/tasks/<int:task_id>",
+      "methods": ["PUT", "DELETE"]
+    },
+    {
+      "name": "Audit Log REST API",
+      "path": "/api/audit",
+      "url": "http://localhost:5000/api/audit",
+      "methods": ["GET"]
+    },
+    {
+      "name": "Service Status & URLs API",
+      "path": "/api/status",
+      "url": "http://localhost:5000/api/status",
+      "methods": ["GET"]
+    },
+    {
+      "name": "URLs JSON File Endpoint",
+      "path": "/api/urls",
+      "url": "http://localhost:5000/api/urls",
+      "methods": ["GET"]
+    }
+  ]
+}
