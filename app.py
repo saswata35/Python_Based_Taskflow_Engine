@@ -21,20 +21,6 @@ DB_CONFIG = {
 }
 
 
-def parse_bool(value, default=False):
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return bool(value)
-    if isinstance(value, str):
-        normalized = value.strip().lower()
-        if normalized in ("true", "1", "yes", "on"):
-            return True
-        if normalized in ("false", "0", "no", "off", ""):
-            return False
-    return default
-
-
 def get_db_connection():
     """Creates a new PostgreSQL database connection."""
     return psycopg2.connect(**DB_CONFIG)
@@ -115,9 +101,7 @@ def load_urls_json():
 @app.route("/urls")
 @app.route("/status")
 def multi_page_app():
-    resp = send_from_directory(app.static_folder, "index.html")
-    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
-    return resp
+    return send_from_directory(app.static_folder, "index.html")
 
 
 # ==========================================
@@ -132,8 +116,6 @@ def get_tasks():
         cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute("SELECT id, title, completed FROM tasks ORDER BY id ASC;")
         tasks = cur.fetchall()
-        for row in tasks:
-            row["completed"] = bool(row["completed"])
         return jsonify(tasks), 200
     except Exception as exc:
         return jsonify({"error": f"Database error: {exc}"}), 500
@@ -148,7 +130,7 @@ def get_tasks():
 def create_task():
     data = request.get_json(silent=True) or {}
     title = str(data.get("title", "")).strip()
-    completed = parse_bool(data.get("completed", False), default=False)
+    completed = bool(data.get("completed", False))
 
     if not title:
         return jsonify({"error": "Task title is required"}), 400
@@ -164,7 +146,6 @@ def create_task():
             (title, completed)
         )
         new_task = cur.fetchone()
-        new_task["completed"] = bool(new_task["completed"])
 
         status_label = "Completed" if completed else "Pending"
         cur.execute(
@@ -200,26 +181,17 @@ def update_task(task_id):
         if not existing:
             return jsonify({"error": "Task not found"}), 404
 
-        new_title = (
-            str(data["title"]).strip()
-            if "title" in data and data["title"] is not None
-            else existing["title"]
-        )
+        new_title = str(data["title"]).strip() if "title" in data and data["title"] is not None else existing["title"]
         if not new_title:
             return jsonify({"error": "Task title cannot be empty"}), 400
 
-        new_completed = (
-            parse_bool(data["completed"], default=bool(existing["completed"]))
-            if "completed" in data
-            else bool(existing["completed"])
-        )
+        new_completed = bool(data["completed"]) if "completed" in data else existing["completed"]
 
         cur.execute(
             "UPDATE tasks SET title = %s, completed = %s WHERE id = %s RETURNING id, title, completed;",
             (new_title, new_completed, task_id)
         )
         updated_task = cur.fetchone()
-        updated_task["completed"] = bool(updated_task["completed"])
 
         status_text = "Completed" if new_completed else "Pending"
         cur.execute(
